@@ -3,12 +3,13 @@ import joblib
 import numpy as np
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from langchain.chat_models import ChatOpenAI
+from langchain.llms import OpenAI
 from langchain.vectorstores import MongoDBAtlasVectorSearch
 from langchain.embeddings import HuggingFaceInstructEmbeddings
 from langchain.retrievers import MultiQueryRetriever
 import os
 import pandas as pd
+import json
 
 import logging
 
@@ -21,8 +22,8 @@ client = MongoClient(MONGO_CONN)
 col = client["bfsi-genai"]["credit_history"]
 vcol = client["bfsi-genai"]["cc_products"]
 
-llm = ChatOpenAI(temperature=0.2, model_name="gpt-3.5-turbo")
-llm_large= ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo-16k")
+llm = OpenAI(temperature=0.2, model_name="gpt-3.5-turbo")
+llm_large= OpenAI(temperature=0, model_name="gpt-3.5-turbo-16k")
 repo_id = "hkunlp/instructor-base"
 hf = HuggingFaceInstructEmbeddings(model_name=repo_id, cache_folder="tmp/")
 hf.embed_instruction = "Represent the document for retrieval of personalized credit cards:"
@@ -36,8 +37,10 @@ df = pd.DataFrame.from_records((col.find({"Unnamed: 0":241}, {"_id":0,"Unnamed: 
 feature_importance = "\n".join(i for i in list(map(lambda x:f"Columns:{x[0]}  Prob score for decision making:{x[1]}" ,zip(df.columns[imp_idx], model.feature_importances_[imp_idx]))))
 
 def get_user_profile(user_id):
-    user_id_df = pd.DataFrame.from_records((col.find({"Unnamed: 0":241}, {"_id":0,"Unnamed: 0":0, "SeriousDlqin2yrs":0})))
+    user_id_df = pd.DataFrame.from_records((col.find({"Unnamed: 0":int(user_id)}, {"_id":0,"Unnamed: 0":0, "SeriousDlqin2yrs":0})))
+    print(user_id_df)
     user_profile_ip = user_id_df.to_dict(orient="records")[0]
+    print(user_profile_ip)
     pred = model.predict_proba(user_id_df)[:,1][0]
     allowed_credit_limit = int(np.ceil(df.MonthlyIncome*6*(1-pred)))
     logging.info(f"Allowed Credit Limit for the user: {allowed_credit_limit}")
@@ -80,7 +83,6 @@ def get_product_suggestions_expl_prompt(user_profile, card_suggestions):
     recomendations_template=f"""
 ##Instruction:
 -If the the user is considerd High/Moderate risk of default and suggestion on user profile in rejection of credit request then return "No Credit Card Recomended"
--Given the user profile recommended credit cards that will best fit the user profile. 
 -Provide card by card reasons(concise) as to why the credit card is suggested to the user.  
 
 ## User profile:
@@ -91,7 +93,9 @@ def get_product_suggestions_expl_prompt(user_profile, card_suggestions):
 
 ## Recommendations=Output as Json with card name as Key and concise reasons point by point as Value:
 """
-    return recomendations_template
+    res = llm.invoke(recomendations_template)
+    return json.loads(res)
+
 
 def get_product_suggestions(user_profile):
     user_profile_based_card_template=f"""
@@ -106,7 +110,7 @@ def get_product_suggestions(user_profile):
     card_suggestions= ""
     for r in rec:
         card_suggestions += f'- Card name:{" ".join(r.metadata["title"].split("-"))} card \n  Card Features:{r.page_content} +\n'
-        return card_suggestions, rec
+    return card_suggestions, rec
 
 @app.route("/hello", methods=["GET"])
 def say_hello():
@@ -114,20 +118,19 @@ def say_hello():
 
 @app.route("/credit_score", methods=["GET"])
 def get_credit_score():
-    user_id = request.args.get("user_id")
+    user_id = request.args.get("userId")
     _ , allowed_credit_limit, user_profile_ip = get_user_profile(user_id)
     prompt = get_credit_score_expl_prompt(user_profile_ip, allowed_credit_limit)
     response = llm.predict(prompt)
-    return jsonify({"UserProfile": response, "AllowedCreditLimit": allowed_credit_limit}) 
+    return jsonify({"userProfile": response, "allowedCreditLimit": allowed_credit_limit}) 
 
 @app.route("/product_suggestions", methods=["POST"])
 def get_product_suggestions_endpoint():
     data = request.get_json()
-    user_profile = data["user_profile"]
+    user_profile = data["userProfile"]
     card_suggestions, rec = get_product_suggestions(user_profile)
     product_recommednations = get_product_suggestions_expl_prompt(user_profile, card_suggestions)
-    return jsonify({"productRecommendations": product_recommednations, "products": rec})
+    return jsonify({"productRecommendations": product_recommednations})
 
-if __name__ == "__main__":
-    # Please do not set debug=True in production
+if __name__ == "__main__":   # Please do not set debug=True in production
     app.run(host="0.0.0.0", port=5000, debug=True)
