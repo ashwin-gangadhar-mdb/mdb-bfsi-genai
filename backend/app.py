@@ -31,7 +31,7 @@ vectorstore = MongoDBAtlasVectorSearch(vcol, hf)
 retriever = vectorstore.as_retriever(search_type='similarity',search_kwargs={'k': 3})
 recommender_retriever = MultiQueryRetriever.from_llm(retriever=retriever,llm=llm_large)
 
-model = joblib.load("../model/classifier.jlb")
+model = joblib.load("classifier.jlb")
 imp_idx = np.argsort(-1 * model.feature_importances_)
 df = pd.DataFrame.from_records((col.find({"Unnamed: 0":241}, {"_id":0,"Unnamed: 0":0, "SeriousDlqin2yrs":0})))
 feature_importance = "\n".join(i for i in list(map(lambda x:f"Columns:{x[0]}  Prob score for decision making:{x[1]}" ,zip(df.columns[imp_idx], model.feature_importances_[imp_idx]))))
@@ -121,7 +121,7 @@ def get_credit_score():
     user_id = request.args.get("userId")
     _ , allowed_credit_limit, user_profile_ip = get_user_profile(user_id)
     prompt = get_credit_score_expl_prompt(user_profile_ip, allowed_credit_limit)
-    response = llm.predict(prompt)
+    response = llm.invoke(prompt)
     return jsonify({"userProfile": response, "allowedCreditLimit": allowed_credit_limit}) 
 
 @app.route("/product_suggestions", methods=["POST"])
