@@ -75,3 +75,4 @@ urllib3==2.2.1
 Werkzeug==3.0.1
 xgboost==2.0.3
 yarl==1.9.4
+langchain-google-genai
